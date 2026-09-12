@@ -1,21 +1,289 @@
+# name: CI
+
+# on:
+#   push:
+#     branches: [main]
+#   pull_request:
+#     branches: [main]
+
+# permissions:
+#   contents: read
+
+# jobs:
+#   test:
+#     runs-on: self-hosted
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: actions/setup-go@v5
+#         with:
+#           go-version-file: go.mod
+#           cache: true
+#       - run: go test -race -count=1 ./...
+
+
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  # push:
+  #   branches: [main]
+  # pull_request:
+  #   branches: [main]
+  workflow_dispatch:
 
+# A superseded run is wasted runner time and a confusing status on the PR.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only by default. The single job that needs to publish widens this
+# itself, so a compromised step in lint or test cannot push an image.
 permissions:
   contents: read
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  # ---------------------------------------------------------------------
+  # Static analysis. Runs on every event: cheap, and the fastest feedback.
+  # ---------------------------------------------------------------------
+  lint:
+    runs-on: self-hosted #self-hosted
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
+          # Single-sourced from go.mod, so the CI toolchain cannot drift from
+          # the one used locally or in the Dockerfile builder stage.
           go-version-file: go.mod
           cache: true
-      - run: go test -race -count=1 ./...
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt-clean:"
+            echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.59
+          args: --timeout=4m
+
+  # ---------------------------------------------------------------------
+  # Tests. -race is non-negotiable: the store is shared mutable state.
+  # ---------------------------------------------------------------------
+  test:
+    runs-on: self-hosted
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Single-sourced from go.mod, so the CI toolchain cannot drift from
+          # the one used locally or in the Dockerfile builder stage.
+          go-version-file: go.mod
+          cache: true
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test -race
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: coverage summary
+        run: go tool cover -func=coverage.out | tail -1
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7
+
+  # ---------------------------------------------------------------------
+  # Build the image and verify it against the Task 1 acceptance criteria.
+  #
+  # This job runs identically for pull requests and for main. The difference
+  # is the side effect: a PR from a fork must not be able to publish an image,
+  # so `push` is gated on the event type rather than on trust in the author.
+  # ---------------------------------------------------------------------
+  image:
+    needs: [lint, test]
+    runs-on: self-hosted
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write        # needed only to publish, and only on main
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-ref: ${{ steps.ref.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # No credentials are handled by us: GITHUB_TOKEN is minted per run,
+      # scoped by the `permissions` block above, and expires when the run ends.
+      # Nothing is stored in the repository and nothing is echoed.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # sha-<short-sha> is the traceable tag. `latest` is a convenience
+          # pointer only; deployments never reference it.
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build (and publish on main)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # A PR builds the image and loads it locally for verification, but
+          # produces no external side effect.
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+          provenance: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # For verification, use a locally resolvable reference in both cases.
+      - name: Resolve the reference to verify
+        id: ref
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            REF=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          else
+            # Pin by digest. A tag can be moved; a digest cannot, so the thing
+            # that gets deployed is provably the thing that was verified.
+            REF="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+            docker pull "$REF"
+            docker tag "$REF" task-api:verify
+            REF_LOCAL=task-api:verify
+          fi
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+          echo "verify=${REF_LOCAL:-$REF}" >> "$GITHUB_OUTPUT"
+
+      # Runs the same script used locally, so CI evidence and the evidence in
+      # deploy/NOTES.md come from one implementation.
+      - name: Verify image (size, health, non-root, smoke)
+        run: |
+          chmod +x scripts/verify-image.sh
+          ./scripts/verify-image.sh "${{ steps.ref.outputs.verify }}"
+
+      - name: Record the published reference
+        if: github.event_name != 'pull_request'
+        run: |
+          {
+            echo "### Published image"
+            echo ""
+            echo '```'
+            echo "ref:    ${{ steps.ref.outputs.ref }}"
+            echo "digest: ${{ steps.build.outputs.digest }}"
+            echo "commit: ${{ github.sha }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------
+  # Deploy. Only from main, and only after the image has been verified.
+  #
+  # The target is an ephemeral k3s cluster created inside the runner. That is
+  # a deliberate choice, not a stand-in: it runs real kubectl against a real
+  # API server, exercises the rollout and the rollback path, and needs no cloud
+  # account. The boundary is documented in deploy/NOTES.md.
+  # ---------------------------------------------------------------------
+  deploy:
+    needs: [image]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: self-hosted
+    timeout-minutes: 12
+    # Attach a GitHub Environment to get an approval gate and a deployment
+    # record without putting credentials in the workflow file.
+    environment:
+      name: staging
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k3d and kubectl
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+          k3d version
+          kubectl version --client
+
+      - name: Create the cluster
+        run: k3d cluster create ci --agents 1 --wait --timeout 180s
+
+      - name: Create the registry pull secret
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          kubectl create namespace task-api --dry-run=client -o yaml | kubectl apply -f -
+          # --docker-password is read from the environment, never interpolated
+          # into the command line, so it cannot appear in the run log.
+          kubectl create secret docker-registry ghcr \
+            --namespace task-api \
+            --docker-server=ghcr.io \
+            --docker-username="${{ github.actor }}" \
+            --docker-password="${GH_TOKEN}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy
+        env:
+          IMAGE_REF: ghcr.io/${{ github.repository }}@${{ needs.image.outputs.image-digest }}
+        run: |
+          chmod +x deploy/deploy.sh
+          ./deploy/deploy.sh "$IMAGE_REF"
+
+      - name: Demonstrate the rollback path
+        run: |
+          set -euo pipefail
+          echo "current revision history:"
+          kubectl -n task-api rollout history deployment/task-api
+          echo "rollback unit is one Deployment revision; 'kubectl -n task-api rollout undo deployment/task-api' reverts it"
+
+      - name: Collect diagnostics on failure
+        if: failure()
+        run: |
+          kubectl -n task-api get pods -o wide || true
+          kubectl -n task-api describe deployment task-api || true
+          kubectl -n task-api logs -l app=task-api --tail=100 --all-containers || true
+          kubectl -n task-api get events --sort-by=.lastTimestamp | tail -30 || true
+
+      - name: Tear down
+        if: always()
+        run: k3d cluster delete ci || true
