@@ -217,3 +217,47 @@ func (c *taskStateCollector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.legacyTotal, prometheus.GaugeValue, float64(total))
 	ch <- prometheus.MustNewConstMetric(c.legacyDone, prometheus.GaugeValue, float64(done))
 }
+
+func RegisterStoreMetrics(reg prometheus.Registerer, store *MemoryStore) {
+	reg.MustRegister(prometheus.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Name: "task_api_tasks_total",
+			Help: "Total number of tasks in the store.",
+		},
+		func() float64 { return float64(store.Count()) },
+	))
+	reg.MustRegister(prometheus.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Name: "task_api_tasks_done",
+			Help: "Number of tasks marked done.",
+		},
+		func() float64 { return float64(store.CountDone()) },
+	))
+}
+
+func TestMetricsEndpoint(t *testing.T) {
+	store := setup()
+	store.Create("task A")
+	task, _ := store.Get(0)
+	done := true
+	store.Update(task.ID, nil, &done)
+	store.Create("task B")
+
+	reg := prometheus.NewRegistry()
+	RegisterStoreMetrics(reg, store)
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+	promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "task_api_tasks_total 2") {
+		t.Fatalf("expected total=2, got:\n%s", body)
+	}
+	if !strings.Contains(body, "task_api_tasks_done 1") {
+		t.Fatalf("expected done=1, got:\n%s", body)
+	}
+}
