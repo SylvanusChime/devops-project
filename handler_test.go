@@ -115,9 +115,14 @@ func TestMetricsEndpoint(t *testing.T) {
 	store.Update(task.ID, nil, &done)
 	store.Create("task B")
 
+	m := NewMetrics(func() (total, done int) {
+		// adapt to whatever MemoryStore exposes
+		return store.Count(), store.CountDone()
+	}, false)
+
 	req := httptest.NewRequest("GET", "/metrics", nil)
 	rec := httptest.NewRecorder()
-	MetricsHandler(store)(rec, req)
+	m.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -125,12 +130,36 @@ func TestMetricsEndpoint(t *testing.T) {
 
 	body := rec.Body.String()
 	if !strings.Contains(body, "task_api_tasks_total 2") {
-		t.Fatalf("expected total=2 in metrics, got:\n%s", body)
+		t.Fatalf("expected total=2, got:\n%s", body)
 	}
 	if !strings.Contains(body, "task_api_tasks_done 1") {
-		t.Fatalf("expected done=1 in metrics, got:\n%s", body)
+		t.Fatalf("expected done=1, got:\n%s", body)
 	}
 }
+// func TestMetricsEndpoint(t *testing.T) {
+// 	store := setup()
+// 	store.Create("task A")
+// 	task, _ := store.Get(0)
+// 	done := true
+// 	store.Update(task.ID, nil, &done)
+// 	store.Create("task B")
+
+// 	req := httptest.NewRequest("GET", "/metrics", nil)
+// 	rec := httptest.NewRecorder()
+// 	MetricsHandler(store)(rec, req)
+
+// 	if rec.Code != http.StatusOK {
+// 		t.Fatalf("expected 200, got %d", rec.Code)
+// 	}
+
+// 	body := rec.Body.String()
+// 	if !strings.Contains(body, "task_api_tasks_total 2") {
+// 		t.Fatalf("expected total=2 in metrics, got:\n%s", body)
+// 	}
+// 	if !strings.Contains(body, "task_api_tasks_done 1") {
+// 		t.Fatalf("expected done=1 in metrics, got:\n%s", body)
+// 	}
+// }
 
 func TestCreateTaskMissingTitle(t *testing.T) {
 	store := setup()
