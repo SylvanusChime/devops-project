@@ -24,6 +24,19 @@
 // 	w.WriteHeader(http.StatusOK)
 // 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 // }
+// func MetricsHandler(store Store) http.HandlerFunc {
+// 	return func(w http.ResponseWriter, r *http.Request) {
+// 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+// 		total, done := store.Stats()
+// 		// Prometheus exposition format
+// 		w.Write([]byte("# HELP task_api_tasks_total Total number of tasks.\n"))
+// 		w.Write([]byte("# TYPE task_api_tasks_total gauge\n"))
+// 		w.Write([]byte("task_api_tasks_total " + strconv.Itoa(total) + "\n"))
+// 		w.Write([]byte("# HELP task_api_tasks_done Number of completed tasks.\n"))
+// 		w.Write([]byte("# TYPE task_api_tasks_done gauge\n"))
+// 		w.Write([]byte("task_api_tasks_done " + strconv.Itoa(done) + "\n"))
+// 	}
+// }
 
 // func ListTasksHandler(store Store) http.HandlerFunc {
 // 	return func(w http.ResponseWriter, r *http.Request) {
@@ -156,19 +169,6 @@ func HealthHandler(version, commit string) http.HandlerFunc {
 // Metrics.Handler() in main.go. The hand-rolled exposition text could not
 // express histograms, which is what P50/P95/P99 require.
 
-func MetricsHandler(store Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		total, done := store.Stats()
-		// Prometheus exposition format
-		w.Write([]byte("# HELP task_api_tasks_total Total number of tasks.\n"))
-		w.Write([]byte("# TYPE task_api_tasks_total gauge\n"))
-		w.Write([]byte("task_api_tasks_total " + strconv.Itoa(total) + "\n"))
-		w.Write([]byte("# HELP task_api_tasks_done Number of completed tasks.\n"))
-		w.Write([]byte("# TYPE task_api_tasks_done gauge\n"))
-		w.Write([]byte("task_api_tasks_done " + strconv.Itoa(done) + "\n"))
-	}
-}
 
 
 func ListTasksHandler(store Store) http.HandlerFunc {
