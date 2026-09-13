@@ -16,7 +16,8 @@ func setup() *MemoryStore {
 func TestHealthEndpoint(t *testing.T) {
 	req := httptest.NewRequest("GET", "/healthz", nil)
 	rec := httptest.NewRecorder()
-	HealthHandler(rec, req)
+	HealthHandler("v0.1.0", "abc1234")(rec, req)
+	// HealthHandler(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
