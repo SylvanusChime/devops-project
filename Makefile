@@ -102,3 +102,9 @@ targets: ## Show Prometheus target health
 
 .PHONY: ci
 ci: lint test verify ## Everything the automated validation path runs
+
+fmt:
+	gofmt -w $$(go list -f '{{.Dir}}' ./...)
+
+check-fmt:
+	@test -z "$$(gofmt -l $$(go list -f '{{.Dir}}' ./...))" || (gofmt -d . ; exit 1)
