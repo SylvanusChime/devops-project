@@ -1,0 +1,83 @@
+
+=== environment ===
+Mon Sep 14 21:39:58 UTC 2026
+Docker version 29.8.0, build 88096ef
+Docker Compose version v5.5.1
+go version go1.26.0 linux/amd64
+
+=== task 1 — tests, no data races ===
+ok  	github.com/SylvanusChime/devops-project	1.059s
+
+=== task 1 — image size (limit 15 MiB = 15728640 bytes) ===
+docker image inspect task-api --format '{{.Size}}' => 15277129
+headroom: 451511 bytes
+
+=== task 1 — non-root ===
+Config.User = 65532:65532
+
+=== task 1 — container reports healthy ===
+ Container task-api Running 
+ Container prometheus Running 
+ Container grafana Running 
+ Container task-api Waiting 
+ Container task-api Healthy 
+attempt 1: healthy
+health=healthy
+
+=== task 1 — /healthz response ===
+{"commit":"local","status":"ok","version":"dev"}
+
+
+=== task 3A — prometheus target state ===
+                    "job": "prometheus"
+                    "job": "prometheus"
+                "scrapeUrl": "http://localhost:9090/metrics",
+                "lastError": "",
+                "health": "up",
+                    "job": "task-api"
+                    "job": "task-api"
+                "scrapeUrl": "http://task-api:8080/metrics",
+                "lastError": "",
+                "health": "up",
+
+=== task 3B — metrics present ===
+# HELP http_requests_in_flight Number of HTTP requests currently being served.
+http_requests_in_flight 0
+# HELP task_api_build_info Build metadata. Always 1; the information is in the labels.
+task_api_build_info{commit="local",version="dev"} 1
+# HELP task_api_tasks_done Number of tasks marked done.
+task_api_tasks_done 0
+# HELP task_api_tasks_pending Number of tasks not yet done.
+task_api_tasks_pending 0
+# HELP task_api_tasks_total Total number of tasks in the store.
+task_api_tasks_total 0
+
+=== task 3C — generate documented traffic ===
+running scripts/loadgen.sh (see deploy/3c-expectations.md for predictions)
+./scripts/verify.sh: line 52: ./scripts/loadgen.sh: No such file or directory
+
+=== task 3C — raw queries for the latency investigation ===
+--- histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket[1m])))
+{"status":"success","data":{"resultType":"vector","result":[]}}
+--- histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[1m])))
+{"status":"success","data":{"resultType":"vector","result":[]}}
+--- histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket[1m])))
+{"status":"success","data":{"resultType":"vector","result":[]}}
+--- rate(http_request_duration_seconds_sum[1m]) / rate(http_request_duration_seconds_count[1m])
+{"status":"success","data":{"resultType":"vector","result":[]}}
+--- sum(rate(http_requests_total[1m]))
+{"status":"success","data":{"resultType":"vector","result":[]}}
+--- sum by (code) (rate(http_requests_total[1m]))
+{"status":"success","data":{"resultType":"vector","result":[]}}
+--- task_api_tasks_total
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"task_api_tasks_total","instance":"task-api:8080","job":"task-api"},"value":[1789422002.171,"0"]}]}}
+--- task_api_tasks_done
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"task_api_tasks_done","instance":"task-api:8080","job":"task-api"},"value":[1789422002.176,"0"]}]}}
+--- task_api_tasks_pending
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"task_api_tasks_pending","instance":"task-api:8080","job":"task-api"},"value":[1789422002.184,"0"]}]}}
+
+=== task 3C — raw bucket distribution (is p50 pinned to the floor?) ===
+
+=== done ===
+evidence written to deploy/evidence/verify-20260914T213958Z.txt
+reference this file from deploy/NOTES.md
