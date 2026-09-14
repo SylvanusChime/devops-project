@@ -165,12 +165,6 @@ func HealthHandler(version, commit string) http.HandlerFunc {
 	}
 }
 
-// MetricsHandler is gone: /metrics is now served by client_golang via
-// Metrics.Handler() in main.go. The hand-rolled exposition text could not
-// express histograms, which is what P50/P95/P99 require.
-
-
-
 func ListTasksHandler(store Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, store.List())

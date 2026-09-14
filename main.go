@@ -1,44 +1,3 @@
-// package main
-
-// import (
-// 	"log"
-// 	"net/http"
-// 	"os"
-// )
-
-// func main() {
-// 	port := getEnv("PORT", "8080")
-// 	store := NewMemoryStore()
-
-// 	mux := http.NewServeMux()
-
-// 	// Health check — must respond 200 for liveness probes
-// 	mux.HandleFunc("GET /healthz", HealthHandler)
-
-// 	// Metrics — Prometheus-compatible plaintext endpoint
-// 	mux.HandleFunc("GET /metrics", MetricsHandler(store))
-
-// 	// Task CRUD
-// 	mux.HandleFunc("GET /tasks", ListTasksHandler(store))
-// 	mux.HandleFunc("POST /tasks", CreateTaskHandler(store))
-// 	mux.HandleFunc("GET /tasks/{id}", GetTaskHandler(store))
-// 	mux.HandleFunc("PUT /tasks/{id}", UpdateTaskHandler(store))
-// 	mux.HandleFunc("DELETE /tasks/{id}", DeleteTaskHandler(store))
-
-// 	addr := ":" + port
-// 	log.Printf("task-api starting on %s", addr)
-// 	if err := http.ListenAndServe(addr, mux); err != nil {
-// 		log.Fatalf("server error: %v", err)
-// 	}
-// }
-
-// func getEnv(key, fallback string) string {
-// 	if v := os.Getenv(key); v != "" {
-// 		return v
-// 	}
-// 	return fallback
-// }
-
 package main
 
 import (
@@ -47,129 +6,122 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 )
 
-// Injected at build time with -ldflags. commit is what makes a running
-// container traceable back to a git revision; /healthz reports it.
+// Injected at link time by the Dockerfile:
+//
+//	-ldflags="-X main.version=... -X main.commit=... -X main.buildDate=..."
+//
+// Defaults apply to `go run .`.
 var (
-	version = "dev"
-	commit  = "unknown"
+	version   = "dev"
+	commit    = "unknown"
+	buildDate = "unknown"
 )
 
 func main() {
-	// The image is built FROM scratch: no shell, no curl, no wget for Docker's
-	// HEALTHCHECK to call. HEALTHCHECK CMD ["/task-api", "-healthcheck"] runs
-	// this path instead, which is why Docker reports a real health status
-	// rather than just having the instruction present.
-	healthcheck := flag.Bool("healthcheck", false,
-		"probe the local /healthz endpoint, then exit 0 (healthy) or 1 (unhealthy)")
+	// The container runs distroless, which has no shell, curl or wget -- so a
+	// Dockerfile HEALTHCHECK cannot shell out. The binary probes itself
+	// instead: HEALTHCHECK CMD ["/usr/local/bin/task-api", "-healthcheck"].
+	healthcheck := flag.Bool("healthcheck", false, "probe /healthz and exit 0 (healthy) or 1")
 	flag.Parse()
 
 	port := getEnv("PORT", "8080")
 
 	if *healthcheck {
-		os.Exit(runHealthcheck(port))
+		os.Exit(probeHealth(port))
 	}
 
-	// Deliberate escape hatch for the observability experiment in
-	// deploy/NOTES.md. When true, /healthz and /metrics join the latency
-	// histogram, reproducing the percentile skew documented there.
-	includeInfra, _ := strconv.ParseBool(getEnv("METRICS_INCLUDE_INFRA_ROUTES", "false"))
-
 	store := NewMemoryStore()
-	metrics := NewMetrics(store.Stats, includeInfra)
+	metrics := NewMetrics(store.Stats, false)
 
 	mux := http.NewServeMux()
 
-	// Each route is registered with an explicit metric label. The label is the
-	// pattern, never the concrete path, which is what keeps cardinality bounded.
-	business := func(pattern, label string, h http.Handler) {
-		mux.Handle(pattern, metrics.Instrument(label, true, h))
+	// Infra routes: not instrumented as business traffic. A liveness probe
+	// every 5s would otherwise be the dominant term in the request rate.
+	//
+	// HealthHandler is a factory: it closes over the build metadata so
+	// /healthz reports which commit is serving. That is the cheapest possible
+	// "what is actually deployed" check during an incident -- curl-able
+	// without a Prometheus query, and available even if scraping is broken.
+	mux.Handle("GET /healthz", metrics.Instrument("/healthz", false, HealthHandler(version, commit)))
+	mux.Handle("GET /metrics", metrics.Instrument("/metrics", false, metrics.Handler()))
+
+	// Business routes. The route label is the mux pattern, not the resolved
+	// path, so "/tasks/{id}" stays one time series regardless of task count.
+	business := []struct {
+		pattern string
+		route   string
+		h       http.HandlerFunc
+	}{
+		{"GET /tasks", "/tasks", ListTasksHandler(store)},
+		{"POST /tasks", "/tasks", CreateTaskHandler(store)},
+		{"GET /tasks/{id}", "/tasks/{id}", GetTaskHandler(store)},
+		{"PUT /tasks/{id}", "/tasks/{id}", UpdateTaskHandler(store)},
+		{"DELETE /tasks/{id}", "/tasks/{id}", DeleteTaskHandler(store)},
 	}
-	infra := func(pattern, label string, h http.Handler) {
-		mux.Handle(pattern, metrics.Instrument(label, false, h))
+	for _, r := range business {
+		mux.Handle(r.pattern, metrics.Instrument(r.route, true, r.h))
 	}
 
-	// Task CRUD
-	business("GET /tasks", "/tasks", ListTasksHandler(store))
-	business("POST /tasks", "/tasks", CreateTaskHandler(store))
-	business("GET /tasks/{id}", "/tasks/{id}", GetTaskHandler(store))
-	business("PUT /tasks/{id}", "/tasks/{id}", UpdateTaskHandler(store))
-	business("DELETE /tasks/{id}", "/tasks/{id}", DeleteTaskHandler(store))
-
-	// Health check -- must respond 200 for liveness probes
-	infra("GET /healthz", "/healthz", HealthHandler(version, commit))
-
-	// Metrics -- Prometheus scrape endpoint, now served by client_golang
-	infra("GET /metrics", "/metrics", metrics.Handler())
-
-	// Catch-all, so unmatched paths are counted instead of bypassing
-	// instrumentation. The label is the literal "unmatched", never the
-	// requested path: a scanner hitting random URLs would otherwise create
-	// unbounded label cardinality.
-	infra("/", "unmatched", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
-	}))
-
-	addr := ":" + port
 	srv := &http.Server{
-		Addr:    addr,
+		Addr:    ":" + port,
 		Handler: mux,
-		// ReadHeaderTimeout closes the Slowloris hole: without it a client can
-		// hold a connection open indefinitely by dribbling headers. gosec
-		// flags the bare ListenAndServe form as G112.
+		// Without these a slow or stuck client holds a connection forever.
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 
-	// Graceful shutdown matters for the deploy story: a rolling update sends
-	// SIGTERM, and without this the pod drops in-flight requests, which shows
-	// up on the dashboard as an error spike caused by the deploy itself.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	errCh := make(chan error, 1)
+	// Graceful shutdown. Without this, SIGTERM from `docker stop` or a
+	// Kubernetes rollout kills in-flight requests mid-response, which shows up
+	// as a 5xx spike on every deploy.
+	shutdownDone := make(chan struct{})
 	go func() {
-		log.Printf("task-api starting on %s (version=%s commit=%s)", addr, version, commit)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		received := <-sig
+		log.Printf("received %s, draining connections", received)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("graceful shutdown failed, forcing close: %v", err)
+			srv.Close()
 		}
+		close(shutdownDone)
 	}()
 
-	select {
-	case err := <-errCh:
+	log.Printf("task-api starting on :%s version=%s commit=%s built=%s",
+		port, version, commit, buildDate)
+
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("server error: %v", err)
-	case <-ctx.Done():
-		log.Printf("shutdown signal received, draining")
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Fatalf("graceful shutdown failed: %v", err)
-	}
-	log.Printf("shutdown complete")
+	<-shutdownDone
+	log.Print("shutdown complete")
 }
 
-// runHealthcheck performs one GET against the local /healthz endpoint.
-// Exit 0 means healthy; anything else marks the container unhealthy.
-func runHealthcheck(port string) int {
+// probeHealth is the -healthcheck path. It returns a process exit code.
+func probeHealth(port string) int {
 	client := &http.Client{Timeout: 2 * time.Second}
 
-	resp, err := client.Get("http://127.0.0.1:" + port + "/healthz")
+	url := fmt.Sprintf("http://%s/healthz", net.JoinHostPort("127.0.0.1", port))
+	resp, err := client.Get(url)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "healthcheck: %v\n", err)
 		return 1
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		fmt.Fprintf(os.Stderr, "healthcheck: status %d\n", resp.StatusCode)
@@ -184,3 +136,4 @@ func getEnv(key, fallback string) string {
 	}
 	return fallback
 }
+
