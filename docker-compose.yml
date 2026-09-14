@@ -1,3 +1,162 @@
+name: task-api
+
+services:
+  task-api:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-local}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    image: task-api:${VERSION:-dev}
+    container_name: task-api
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+    # The image is scratch-based: no shell, no curl, no wget. The binary
+    # probes itself. Anything of the form ["CMD-SHELL", ...] would fail here.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/task-api", "-healthcheck"]
+      interval: 10s
+      timeout: 3s
+      start_period: 3s
+      retries: 3
+    restart: unless-stopped
+    networks: [obs]
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=6h
+      # Needed so a config change can be applied without restarting the
+      # container (and losing the TSDB head block):
+      #   curl -XPOST localhost:9090/-/reload
+      - --web.enable-lifecycle
+    # Waiting for the app to be healthy rather than merely started avoids a
+    # burst of "connection refused" scrapes that look like a real outage on
+    # the dashboard's first minute.
+    depends_on:
+      task-api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [obs]
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      # Anonymous viewer access so the stack is demonstrable without a login
+      # step. Admin still requires the password below. Do not copy this into
+      # anything internet-facing.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_DEFAULT_THEME: light
+      # Deep-link straight to the dashboard instead of the empty home page.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/task-api.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks: [obs]
+
+volumes:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  obs:
+    driver: bridge
+
+
+# services:
+#   app:
+#     build:
+#       context: .
+#       args:
+#         VERSION: ${VERSION:-local}
+#         COMMIT: ${COMMIT:-dev}
+#     image: task-api:${VERSION:-local}
+#     container_name: task-api
+#     ports:
+#       - "8080:8080"
+#     environment:
+#       PORT: "8080"
+#       # Flip to "true" to reproduce the percentile-skew experiment recorded in
+#       # deploy/NOTES.md.
+#       METRICS_INCLUDE_INFRA_ROUTES: "false"
+#     # Inherited from the Dockerfile HEALTHCHECK, restated so `docker compose ps`
+#     # gates dependants on it.
+#     healthcheck:
+#       test: ["CMD", "/task-api", "-healthcheck"]
+#       interval: 5s
+#       timeout: 3s
+#       retries: 3
+#       start_period: 3s
+#     restart: unless-stopped
+
+#   prometheus:
+#     image: prom/prometheus:v2.53.0
+#     container_name: prometheus
+#     ports:
+#       - "9090:9090"
+#     volumes:
+#       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+#       - prometheus-data:/prometheus
+#     command:
+#       - --config.file=/etc/prometheus/prometheus.yml
+#       - --storage.tsdb.path=/prometheus
+#       - --storage.tsdb.retention.time=6h
+#       - --web.enable-lifecycle
+#     depends_on:
+#       # Waits for the container to report healthy, not merely to have started.
+#       # Without this Prometheus records its first scrapes as DOWN and the
+#       # dashboard opens with a misleading gap at the left edge.
+#       app:
+#         condition: service_healthy
+#     restart: unless-stopped
+
+#   grafana:
+#     image: grafana/grafana:11.1.0
+#     container_name: grafana
+#     ports:
+#       - "3000:3000"
+#     environment:
+#       # Local-only convenience so the dashboard opens without a login prompt
+#       # during review. This is a demo affordance and is called out as such in
+#       # deploy/NOTES.md -- it is not how the stack would be exposed anywhere else.
+#       GF_AUTH_ANONYMOUS_ENABLED: "true"
+#       GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+#       GF_AUTH_DISABLE_LOGIN_FORM: "true"
+#       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+#       GF_USERS_DEFAULT_THEME: "light"
+#     volumes:
+#       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+#       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+#       - grafana-data:/var/lib/grafana
+#     depends_on:
+#       - prometheus
+#     restart: unless-stopped
+
+# volumes:
+#   prometheus-data:
+#   grafana-data:
+
 # services:
 #   app:
 #     build: .
@@ -12,77 +171,3 @@
 # Grafana: http://localhost:3000   Prometheus: http://localhost:9090
 #
 # No `version:` key -- it has been obsolete since Compose v2 and emits a warning.
-
-services:
-  app:
-    build:
-      context: .
-      args:
-        VERSION: ${VERSION:-local}
-        COMMIT: ${COMMIT:-dev}
-    image: task-api:${VERSION:-local}
-    container_name: task-api
-    ports:
-      - "8080:8080"
-    environment:
-      PORT: "8080"
-      # Flip to "true" to reproduce the percentile-skew experiment recorded in
-      # deploy/NOTES.md.
-      METRICS_INCLUDE_INFRA_ROUTES: "false"
-    # Inherited from the Dockerfile HEALTHCHECK, restated so `docker compose ps`
-    # gates dependants on it.
-    healthcheck:
-      test: ["CMD", "/task-api", "-healthcheck"]
-      interval: 5s
-      timeout: 3s
-      retries: 3
-      start_period: 3s
-    restart: unless-stopped
-
-  prometheus:
-    image: prom/prometheus:v2.53.0
-    container_name: prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=6h
-      - --web.enable-lifecycle
-    depends_on:
-      # Waits for the container to report healthy, not merely to have started.
-      # Without this Prometheus records its first scrapes as DOWN and the
-      # dashboard opens with a misleading gap at the left edge.
-      app:
-        condition: service_healthy
-    restart: unless-stopped
-
-  grafana:
-    image: grafana/grafana:11.1.0
-    container_name: grafana
-    ports:
-      - "3000:3000"
-    environment:
-      # Local-only convenience so the dashboard opens without a login prompt
-      # during review. This is a demo affordance and is called out as such in
-      # deploy/NOTES.md -- it is not how the stack would be exposed anywhere else.
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
-      GF_AUTH_DISABLE_LOGIN_FORM: "true"
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
-      GF_USERS_DEFAULT_THEME: "light"
-    volumes:
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
-      - grafana-data:/var/lib/grafana
-    depends_on:
-      - prometheus
-    restart: unless-stopped
-
-volumes:
-  prometheus-data:
-  grafana-data:
-
