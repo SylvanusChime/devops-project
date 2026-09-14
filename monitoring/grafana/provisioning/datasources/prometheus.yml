@@ -1,32 +1,19 @@
-global:
-  # 5s is deliberately tighter than a production default (15-30s). This stack
-  # exists to be demonstrated in a few minutes, and rate() needs at least four
-  # samples in the window to produce a trustworthy value -- at 30s scrape, a
-  # rate(...[1m]) panel would show nothing useful for the first two minutes.
-  #
-  # The cost is 6x the sample volume. Fine for a single target with ~40 series;
-  # not what you would run against a fleet.
-  scrape_interval: 5s
-  scrape_timeout: 3s
-  evaluation_interval: 15s
+apiVersion: 1
 
-  external_labels:
-    env: local
-    service: task-api
-
-scrape_configs:
-  - job_name: task-api
-    metrics_path: /metrics
-    static_configs:
-      # Service name from docker-compose, resolved on the "obs" network.
-      # Not localhost: that would be the Prometheus container itself.
-      - targets: ["task-api:8080"]
-        labels:
-          instance: task-api:8080
-
-  # Prometheus scraping itself. Cheap, and it gives a control signal: if the
-  # task-api target goes stale but this one does not, the problem is the app or
-  # the network, not the scrape loop.
-  - job_name: prometheus
-    static_configs:
-      - targets: ["localhost:9090"]
+datasources:
+  - name: Prometheus
+    # The dashboard JSON references this uid directly. If you rename it here,
+    # rename it there too or every panel reports "datasource not found" -- the
+    # single most common reason a provisioned dashboard renders empty.
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Must match scrape_interval in monitoring/prometheus.yml. Grafana uses
+      # this to pick a sensible $__rate_interval; if it is wrong, rate()
+      # queries silently return gaps.
+      timeInterval: 5s
+      httpMethod: POST
