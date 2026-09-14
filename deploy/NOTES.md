@@ -131,3 +131,8 @@ AI was used. Tool and model: Claude Code (CLI), model `claude-opus5`.
 The model initially proposed a RegisterStoreMetrics helper that registered into the global default registry. I rejected it: the default registerer is process-global, so constructing metrics twice in tests panics on duplicate registration. Replaced with a private prometheus.NewRegistry() per Metrics instance.
 
 The model added UPX compression when asked to shrink the image, then I had it removed — the binary was already 10.9 MB against a 15 MiB budget, and packing costs decompression on every healthcheck exec for bytes I did not need.
+
+
+The unknown result is a second, smaller investigation and it costs you two sentences:
+
+The first clean-environment run reported both Prometheus targets as health: "unknown" (verify-20260914T230102Z.txt). This was not a monitoring failure: verify.sh waited for container health but not for the first scrape to complete, so it queried the target list during cold start. Fixed by polling the targets API until a sample lands. Container readiness and scrape readiness are distinct conditions, and the earlier runs had only passed because the stack was already warm.
