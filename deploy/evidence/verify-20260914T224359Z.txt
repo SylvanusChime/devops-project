@@ -1,0 +1,170 @@
+
+=== environment ===
+Mon Sep 14 22:43:59 UTC 2026
+Docker version 29.8.0, build 88096ef
+Docker Compose version v5.5.1
+go version go1.26.0 linux/amd64
+
+=== task 1 — tests, no data races ===
+ok  	github.com/SylvanusChime/devops-project	1.126s
+
+=== task 1 — image size (limit 15 MiB = 15728640 bytes) ===
+docker image inspect task-api --format '{{.Size}}' => 15277130
+headroom: 451510 bytes
+
+=== task 1 — non-root ===
+Config.User = 65532:65532
+
+=== task 1 — container reports healthy ===
+ Container prometheus Running 
+ Container grafana Running 
+ Container task-api Running 
+ Container task-api Waiting 
+ Container task-api Healthy 
+attempt 1: healthy
+health=healthy
+
+=== task 1 — /healthz response ===
+{"commit":"local","status":"ok","version":"dev"}
+
+
+=== task 3A — prometheus target state ===
+                    "job": "prometheus"
+                    "job": "prometheus"
+                "scrapeUrl": "http://localhost:9090/metrics",
+                "lastError": "",
+                "health": "up",
+                    "job": "task-api"
+                    "job": "task-api"
+                "scrapeUrl": "http://task-api:8080/metrics",
+                "lastError": "",
+                "health": "up",
+
+=== task 3B — metrics present ===
+# HELP http_requests_in_flight Number of HTTP requests currently being served.
+http_requests_in_flight 0
+# HELP task_api_build_info Build metadata. Always 1; the information is in the labels.
+task_api_build_info{commit="local",version="dev"} 1
+# HELP task_api_tasks_done Number of tasks marked done.
+task_api_tasks_done 0
+# HELP task_api_tasks_pending Number of tasks not yet done.
+task_api_tasks_pending 0
+# HELP task_api_tasks_total Total number of tasks in the store.
+task_api_tasks_total 0
+
+=== task 3C — generate documented traffic ===
+running scripts/loadgen.sh (see deploy/3c-expectations.md for predictions)
+--- baseline: steady create/list/get, expect flat rps and 2xx only
+201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 201 200 200 
+--- state: mark roughly half the tasks done, expect task_api_tasks_done to climb
+200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 
+--- burst: 50 concurrent creates, expect an rps spike and in-flight > 1
+burst done
+--- errors: 404s and 400s, expect the 4xx series to appear and 5xx to stay zero
+404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 404 400 404 200 
+
+Final state:
+task_api_tasks_done 63
+task_api_tasks_pending 237
+task_api_tasks_total 300
+
+=== task 3C — raw queries for the latency investigation ===
+--- histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket[1m])))
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1789425970.108,"0.00007374348664158631"]}]}}
+--- histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[1m])))
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1789425970.121,"0.0009126831776094277"]}]}}
+--- histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket[1m])))
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1789425970.133,"0.0010532634374999983"]}]}}
+--- rate(http_request_duration_seconds_sum[1m]) / rate(http_request_duration_seconds_count[1m])
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"task-api:8080","job":"task-api","method":"GET","route":"/tasks"},"value":[1789425970.147,"0.0006630182752293583"]},{"metric":{"instance":"task-api:8080","job":"task-api","method":"GET","route":"/tasks/{id}"},"value":[1789425970.147,"0.000047527697247706465"]},{"metric":{"instance":"task-api:8080","job":"task-api","method":"POST","route":"/tasks"},"value":[1789425970.147,"0.00008936259174311943"]},{"metric":{"instance":"task-api:8080","job":"task-api","method":"PUT","route":"/tasks/{id}"},"value":[1789425970.147,"NaN"]},{"metric":{"instance":"task-api:8080","job":"task-api","method":"DELETE","route":"/tasks/{id}"},"value":[1789425970.147,"0.000051735037586661145"]}]}}
+--- sum(rate(http_requests_total[1m]))
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1789425970.159,"15.837489090909092"]}]}}
+--- sum by (code) (rate(http_requests_total[1m]))
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"code":"200"},"value":[1789425970.171,"3.9636363636363634"]},{"metric":{"code":"201"},"value":[1789425970.171,"0"]},{"metric":{"code":"400"},"value":[1789425970.171,"3.9587436363636366"]},{"metric":{"code":"404"},"value":[1789425970.171,"7.917487272727273"]}]}}
+--- task_api_tasks_total
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"task_api_tasks_total","instance":"task-api:8080","job":"task-api"},"value":[1789425970.183,"300"]}]}}
+--- task_api_tasks_done
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"task_api_tasks_done","instance":"task-api:8080","job":"task-api"},"value":[1789425970.195,"63"]}]}}
+--- task_api_tasks_pending
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"task_api_tasks_pending","instance":"task-api:8080","job":"task-api"},"value":[1789425970.207,"237"]}]}}
+
+=== task 3C — raw bucket distribution (is p50 pinned to the floor?) ===
+http_request_duration_seconds_bucket{method="DELETE",route="/tasks/{id}",le="0.0001"} 228
+http_request_duration_seconds_bucket{method="DELETE",route="/tasks/{id}",le="0.00025"} 237
+http_request_duration_seconds_bucket{method="DELETE",route="/tasks/{id}",le="0.0005"} 237
+http_request_duration_seconds_bucket{method="DELETE",route="/tasks/{id}",le="0.001"} 237
+http_request_duration_seconds_bucket{method="DELETE",route="/tasks/{id}",le="0.0025"} 237
+http_request_duration_seconds_bucket{method="DELETE",route="/tasks/{id}",le="0.005"} 237
+http_request_duration_seconds_bucket{method="DELETE",route="/tasks/{id}",le="0.01"} 237
+http_request_duration_seconds_bucket{method="DELETE",route="/tasks/{id}",le="0.025"} 237
+http_request_duration_seconds_bucket{method="DELETE",route="/tasks/{id}",le="0.05"} 237
+http_request_duration_seconds_bucket{method="DELETE",route="/tasks/{id}",le="0.1"} 237
+http_request_duration_seconds_bucket{method="DELETE",route="/tasks/{id}",le="0.25"} 237
+http_request_duration_seconds_bucket{method="DELETE",route="/tasks/{id}",le="0.5"} 237
+http_request_duration_seconds_bucket{method="DELETE",route="/tasks/{id}",le="1"} 237
+http_request_duration_seconds_bucket{method="DELETE",route="/tasks/{id}",le="2.5"} 237
+http_request_duration_seconds_bucket{method="DELETE",route="/tasks/{id}",le="+Inf"} 237
+http_request_duration_seconds_bucket{method="GET",route="/tasks",le="0.0001"} 18
+http_request_duration_seconds_bucket{method="GET",route="/tasks",le="0.00025"} 58
+http_request_duration_seconds_bucket{method="GET",route="/tasks",le="0.0005"} 224
+http_request_duration_seconds_bucket{method="GET",route="/tasks",le="0.001"} 474
+http_request_duration_seconds_bucket{method="GET",route="/tasks",le="0.0025"} 487
+http_request_duration_seconds_bucket{method="GET",route="/tasks",le="0.005"} 488
+http_request_duration_seconds_bucket{method="GET",route="/tasks",le="0.01"} 488
+http_request_duration_seconds_bucket{method="GET",route="/tasks",le="0.025"} 488
+http_request_duration_seconds_bucket{method="GET",route="/tasks",le="0.05"} 488
+http_request_duration_seconds_bucket{method="GET",route="/tasks",le="0.1"} 488
+http_request_duration_seconds_bucket{method="GET",route="/tasks",le="0.25"} 488
+http_request_duration_seconds_bucket{method="GET",route="/tasks",le="0.5"} 488
+http_request_duration_seconds_bucket{method="GET",route="/tasks",le="1"} 488
+http_request_duration_seconds_bucket{method="GET",route="/tasks",le="2.5"} 488
+http_request_duration_seconds_bucket{method="GET",route="/tasks",le="+Inf"} 488
+http_request_duration_seconds_bucket{method="GET",route="/tasks/{id}",le="0.0001"} 465
+http_request_duration_seconds_bucket{method="GET",route="/tasks/{id}",le="0.00025"} 486
+http_request_duration_seconds_bucket{method="GET",route="/tasks/{id}",le="0.0005"} 487
+http_request_duration_seconds_bucket{method="GET",route="/tasks/{id}",le="0.001"} 487
+http_request_duration_seconds_bucket{method="GET",route="/tasks/{id}",le="0.0025"} 487
+http_request_duration_seconds_bucket{method="GET",route="/tasks/{id}",le="0.005"} 487
+http_request_duration_seconds_bucket{method="GET",route="/tasks/{id}",le="0.01"} 487
+http_request_duration_seconds_bucket{method="GET",route="/tasks/{id}",le="0.025"} 487
+http_request_duration_seconds_bucket{method="GET",route="/tasks/{id}",le="0.05"} 487
+http_request_duration_seconds_bucket{method="GET",route="/tasks/{id}",le="0.1"} 487
+http_request_duration_seconds_bucket{method="GET",route="/tasks/{id}",le="0.25"} 487
+http_request_duration_seconds_bucket{method="GET",route="/tasks/{id}",le="0.5"} 487
+http_request_duration_seconds_bucket{method="GET",route="/tasks/{id}",le="1"} 487
+http_request_duration_seconds_bucket{method="GET",route="/tasks/{id}",le="2.5"} 487
+http_request_duration_seconds_bucket{method="GET",route="/tasks/{id}",le="+Inf"} 487
+http_request_duration_seconds_bucket{method="POST",route="/tasks",le="0.0001"} 200
+http_request_duration_seconds_bucket{method="POST",route="/tasks",le="0.00025"} 521
+http_request_duration_seconds_bucket{method="POST",route="/tasks",le="0.0005"} 533
+http_request_duration_seconds_bucket{method="POST",route="/tasks",le="0.001"} 536
+http_request_duration_seconds_bucket{method="POST",route="/tasks",le="0.0025"} 537
+http_request_duration_seconds_bucket{method="POST",route="/tasks",le="0.005"} 537
+http_request_duration_seconds_bucket{method="POST",route="/tasks",le="0.01"} 537
+http_request_duration_seconds_bucket{method="POST",route="/tasks",le="0.025"} 537
+http_request_duration_seconds_bucket{method="POST",route="/tasks",le="0.05"} 537
+http_request_duration_seconds_bucket{method="POST",route="/tasks",le="0.1"} 537
+http_request_duration_seconds_bucket{method="POST",route="/tasks",le="0.25"} 537
+http_request_duration_seconds_bucket{method="POST",route="/tasks",le="0.5"} 537
+http_request_duration_seconds_bucket{method="POST",route="/tasks",le="1"} 537
+http_request_duration_seconds_bucket{method="POST",route="/tasks",le="2.5"} 537
+http_request_duration_seconds_bucket{method="POST",route="/tasks",le="+Inf"} 537
+http_request_duration_seconds_bucket{method="PUT",route="/tasks/{id}",le="0.0001"} 50
+http_request_duration_seconds_bucket{method="PUT",route="/tasks/{id}",le="0.00025"} 63
+http_request_duration_seconds_bucket{method="PUT",route="/tasks/{id}",le="0.0005"} 63
+http_request_duration_seconds_bucket{method="PUT",route="/tasks/{id}",le="0.001"} 63
+http_request_duration_seconds_bucket{method="PUT",route="/tasks/{id}",le="0.0025"} 63
+http_request_duration_seconds_bucket{method="PUT",route="/tasks/{id}",le="0.005"} 63
+http_request_duration_seconds_bucket{method="PUT",route="/tasks/{id}",le="0.01"} 63
+http_request_duration_seconds_bucket{method="PUT",route="/tasks/{id}",le="0.025"} 63
+http_request_duration_seconds_bucket{method="PUT",route="/tasks/{id}",le="0.05"} 63
+http_request_duration_seconds_bucket{method="PUT",route="/tasks/{id}",le="0.1"} 63
+http_request_duration_seconds_bucket{method="PUT",route="/tasks/{id}",le="0.25"} 63
+http_request_duration_seconds_bucket{method="PUT",route="/tasks/{id}",le="0.5"} 63
+http_request_duration_seconds_bucket{method="PUT",route="/tasks/{id}",le="1"} 63
+http_request_duration_seconds_bucket{method="PUT",route="/tasks/{id}",le="2.5"} 63
+http_request_duration_seconds_bucket{method="PUT",route="/tasks/{id}",le="+Inf"} 63
+
+=== done ===
+evidence written to deploy/evidence/verify-20260914T224359Z.txt
+reference this file from deploy/NOTES.md
