@@ -38,15 +38,35 @@ than rebuilding, for the same reason. The running commit is queryable at
 runtime via `task_api_build_info{version,commit}`, so a latency or error change
 can be correlated with a deploy without opening CI.
 
-**Evidence:**
 
-- Image size: `docker image inspect` reports **15,277,130** bytes (limit
-  15,728,640, headroom 451,510). `docker history` sums to ~10.92 MB; the gap is
-  Docker 29's containerd store counting compressed blobs alongside the
-  snapshot. The README's command is binding, so 15,277,130 is the figure.
+**Evidence:**
+- Actions run: «URL from `gh run list`»
+- Published: `ghcr.io/sylvanuschime/devops-project:sha-48842a31`
+- Digest: `sha256:fb35095820011ac241fb7054aa780ba10e5452bd5ade2ccd32f2baf3fc01e304`
+- Traceability verified:
+  `docker inspect ... --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'`
+  returns `48842a315152708a03b8f392884a79cbfed9af33`, equal to the commit in the
+  tag. Rollback is `docker pull` of an earlier `sha-` tag — no rebuild, so the
+  artifact deployed is byte-identical to the one tested.
+
+- - Image size: `docker image inspect task-api --format '{{.Size}}'` reports
+  **15,277,160** bytes against the 15,728,640 limit (headroom 451,480).
+  `docker history` layers sum to ~10.92 MB and the build stage reports the
+  binary at 10,899,582 bytes. The difference is Docker 29's containerd image
+  store counting both the unpacked snapshot and the compressed content-store
+  blob for the same layer: 10,899,582 + 4,332,484 + the two ~12 kB identity
+  layers + config and manifest blobs accounts for the reported figure. A
+  single-platform build produces the same number, so it is not multi-arch
+  summation. The README's command is binding and it passes; the image that
+  actually runs is ~10.9 MB.
+  image summary
+image size: 10895549 bytes (limit 15728640)
+
+Docker Build summary
 - Non-root: `Config.User = 65532:65532`
 - Health: `docker inspect --format '{{.State.Health.Status}}'` → `healthy`
   (`deploy/evidence/verify-20260914T233018Z.txt`)
+
 
 ## 3. One investigation I actually performed
 
@@ -125,11 +145,23 @@ so a fork still exercises the full build with no credentials. Credentials are
 the run-scoped `GITHUB_TOKEN` — no PAT stored in the repository, nothing echoed
 to logs.
 
-(a) Both jobs ran online: link the run and the digest.
+"Deployment runs on a self-hosted runner, which is my workstation"
 (b) They could not: state why (e.g. GHCR package permissions), and reference
 the local equivalent — `make image size scan` plus
 `deploy/evidence/verify-*.txt`, which performs the same smoke test and target
 assertion the deploy job does.»
+
+Triggered via push 
+SylvanusChime
+pushed
+ 48842a3
+main
+Status
+Success
+Total duration
+3m 29s
+Artifacts
+2
 
 ## 6. Time, unfinished work, next steps
 
