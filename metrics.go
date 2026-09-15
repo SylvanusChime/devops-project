@@ -234,5 +234,3 @@ func (c *taskStateCollector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.doneDesc, prometheus.GaugeValue, float64(done))
 	ch <- prometheus.MustNewConstMetric(c.pendingDesc, prometheus.GaugeValue, float64(total-done))
 }
-
-

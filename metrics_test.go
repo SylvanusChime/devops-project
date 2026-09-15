@@ -201,4 +201,3 @@ func TestHealthzReportsBuild(t *testing.T) {
 		}
 	}
 }
-
