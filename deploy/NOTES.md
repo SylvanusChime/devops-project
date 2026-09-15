@@ -1,138 +1,166 @@
-# Implementation Notes and Decision Record
-
-> Record only assumptions, decisions, and evidence from this submission. Reference specific files, jobs, commands, or runtime results. Keep the document concise and aim for no more than 1,000 words.
-
-## 1. Key Assumptions
-
-List three key assumptions that your implementation depends on. These may concern the deployment boundary, team workflow, traffic patterns, or external platform capabilities.
-
-For each assumption, explain why it was needed and what would need to change if it proved false. Do not present assumptions as known facts.
-
-Single instance, in-memory store. MemoryStore has no persistence, so task state resets on restart and there is no horizontal scaling story. Every metric decision below assumes one replica.
-
-The deployment target is ephemeral and local. The assignment does not require a public URL, and this repository holds no cloud credentials, so deploy stands the stack up on the CI runner and tears it down. Boundary documented in §5.
-
-No outbound TLS from the app. This is what makes a scratch base safe — there is no CA bundle in the image.
-
-Prometheus scrape interval 5s. Chosen so rate() has ≥4 samples within a 1m window during a short demo. Not a production default.
-
-/healthz is liveness, not readiness. It deliberately does not check dependencies; a dependency blip must not cause a restart loop.
+# NOTES.md — decision record
 
 
-## 2. Delivery Path
 
-Starting with a pull or merge request, describe the jobs the code passes through, the event that publishes the image, how the artifact is identified, where it is deployed, and the smallest unit that can be rolled back.
+## 1. Key assumptions
 
-Reference the relevant workflow jobs, deployment commands, and image identifiers. If a step could not be run because an external environment was unavailable, state the validation boundary clearly.
+1. **Single instance, in-memory store.** No persistence, no horizontal
+   scaling. This is why `taskStateCollector` reads the store directly at scrape
+   time rather than aggregating across replicas.
+2. **Deployment target is ephemeral and local.** The assignment does not
+   require a public URL and this repository holds no cloud credentials, so the
+   `deploy` job stands the stack up on the CI runner, smoke-tests it, and tears
+   it down. Boundary in §5.
+3. **No outbound TLS from the app.** This is what makes a `scratch` base safe —
+   there is no CA bundle in the image. See the trade-off in §4(a).
+4. **Prometheus scrape interval 5s**, not a production 15–30s. `rate()` needs
+   ~4 samples in its window; at 30s a `rate(...[1m])` panel shows nothing for
+   the first two minutes of a demo. Cost is 6× sample volume, acceptable for
+   one target with ~85 series.
+5. **`/healthz` is liveness, not readiness.** It deliberately does not check
+   dependencies — a dependency blip must not cause a restart loop. A readiness
+   endpoint is listed as unfinished work in §6.
+6. **`scripts/loadgen.sh` validates the dashboard, it is not a benchmark.**
+   curl pays process startup per request, inflating client-side timing only.
 
-Path: commit → validate (gofmt, vet, staticcheck, go test -race, build) → image (buildx, 15 MiB gate, non-root assertion, live health check, Trivy) → publish (GHCR, main only) → deploy (pull published image, compose up, smoke test, verify Prometheus target UP).
+## 2. Delivery path and rollback unit
 
-Rollback unit: the image digest. Every push to main publishes ghcr.io/<owner>/devops-project:sha-<commit> alongside :latest. Rollback is re-deploying a previous sha- tag; no rebuild is involved, so the artifact rolled back to is byte-identical to the one that was tested. The running commit is queryable at runtime via task_api_build_info{version,commit}, so the dashboard can be correlated with a deploy without consulting CI.
+**Path:** commit → `validate` (gofmt, vet, staticcheck, `go test -race`,
+build) → `image` (buildx, 15 MiB gate, non-root assertion, live health check,
+Trivy) → `publish` (GHCR, main only) → `deploy` (pull published image, compose
+up, smoke test, assert Prometheus target UP).
 
-Deploy pulls the published image rather than rebuilding — otherwise the tested artifact and the shipped artifact are not the same bytes.
+**Rollback unit: the image digest.** Every push to main publishes
+`ghcr.io/<owner>/devops-project:sha-<commit>` alongside `:latest`. Rollback is
+redeploying a previous `sha-` tag — no rebuild, so the artifact rolled back to
+is byte-identical to the one tested. `deploy` pulls the published image rather
+than rebuilding, for the same reason. The running commit is queryable at
+runtime via `task_api_build_info{version,commit}`, so a latency or error change
+can be correlated with a deploy without opening CI.
 
-Evidence:
+**Evidence:**
 
-Run: «FILL — link to the successful Actions run»
-Digest: «FILL — from the publish job summary»
-docker image inspect task-api --format '{{.Size}}' → 10,899,582 bytes (limit 15,728,640; 31% headroom)
+- Image size: `docker image inspect` reports **15,277,130** bytes (limit
+  15,728,640, headroom 451,510). `docker history` sums to ~10.92 MB; the gap is
+  Docker 29's containerd store counting compressed blobs alongside the
+  snapshot. The README's command is binding, so 15,277,130 is the figure.
+- Non-root: `Config.User = 65532:65532`
+- Health: `docker inspect --format '{{.State.Health.Status}}'` → `healthy`
+  (`deploy/evidence/verify-20260914T233018Z.txt`)
 
-## 3. One Actual Validation or Investigation
+## 3. One investigation I actually performed
 
-Choose one risky assumption, runtime result, or observability signal from this assignment and describe how you checked it:
+**Predicted before any traffic ran** (`deploy/3c-expectations.md`, committed
+separately so the timestamp proves the order): buckets start at 100µs and an
+in-memory store may serve faster, in which case `histogram_quantile` would
+interpolate from zero across an empty range and report a p50 that looks like a
+measurement but is not.
 
-- what you wanted to validate and what you expected;
-- which commands, queries, or experiments you ran;
-- which evidence supported or disproved your expectation;
-- whether you changed the implementation;
-- if you made a change, what the repeated test showed; otherwise, why the current evidence was sufficient.
+**Observed** (`verify-20260914T224359Z.txt`): aggregate p50 came back as
+**73.4µs — below the first boundary entirely**. Share of observations trapped
+in the lowest bucket: `GET /tasks/{id}` 95.5%, DELETE 96.6%, PUT 85.7%.
 
-You do not need to encounter a failure. Do not invent an incident or a test result.
+**Three candidates, separated.** Experiment artefact: curl startup is
+client-side and inflates rather than deflates server timing — ruled out by
+direction. Service behaviour: the API really is that fast — consistent, but
+does not explain three significant figures inside an unmeasured range.
+Implementation: bucket floor too high — discriminated by the control query
+`rate(http_request_duration_seconds_sum[1m]) / rate(..._count[1m])`, the true
+mean with no interpolation. `GET /tasks/{id}` returned 47.5µs, inside a bucket
+with no internal structure. Confirmed.
 
-Panel	What I expect	Why
-1	Scrape target	Stays UP throughout	Single static target, app healthy before Prometheus starts
-2	Requests/sec	Rises to ~15 rps in baseline, spikes during burst, settles ~20 rps in errors	3 requests per 0.2s loop ≈ 15 rps
-3	5xx ratio	Stays at 0% for the whole run	The error phase generates 404 and 400 only; nothing should 5xx
-4	In flight	1 during sequential phases, >1 only during the 50-way burst	curl calls are serial except in phase_burst
-5	Build	Constant, shows the deployed commit	No redeploy mid-run
-6	Rate by route/code	/tasks and /tasks/{id} only. A 404 series appears when the errors phase starts, and no series named /tasks/0 ever appears	Route label is the mux pattern, not the path
-7	Latency p50/p95/p99	«FILL —	are the reported latency percentiles true? An in-memory map should answer in tens
-of microseconds.
-8	Task state	total climbs monotonically, done steps up during the state phase, pending = total − done at all times	Collector reads the store at scrape time
-9	p95 by route	POST /tasks slightly above GET /tasks/{id}	Writes take the store's write lock
-The signal I plan to confirm further, and why
+**Changed** buckets down to 10/25/50µs; **re-validated**
+(`verify-20260914T225128Z.txt`): 153 of 484 observations now below 50µs.
 
-Latency percentiles (panel 7).
+**The result worth reporting is that the number barely moved: 73.4µs →
+78.4µs.** The original was approximately right — by luck, and nothing in the
+data could have shown that. What changed is not the value but whether it is
+evidence. A panel that is confidently wrong is worse than one visibly empty,
+because on-call trusts it.
 
-The buckets in metric.go start at 100µs. An in-memory map behind a mutex may well serve p50 below that floor. If so, histogram_quantile has nothing to interpolate within the first bucket and p50 will read as a flat line at or near 0.0001s — which looks like a plausible latency value rather than an artefact.
+**Second iteration:** that run showed `le="1e-05"` and `le="2.5e-05"` empty
+everywhere. Dropped 10µs, kept 25µs as a guard so a future speedup stays
+detectable (`verify-20260914T233018Z.txt`).
 
-That is the failure mode worth chasing: a panel that is confidently wrong is more dangerous than one that is obviously empty. An on-call engineer would trust it.
+**Corroboration.** Across five runs every counter reconciles against the
+traffic mix. Final run: POST 536 = 248 baseline + 50 burst + 238 rejected at
+400; `done` 62 + `pending` 236 = `total` 298. Instrumentation counted correctly
+throughout; only bucket resolution was wrong.
 
-Distinguishing the three possible causes:
+**A second find.** The first clean-environment run reported both targets as
+`health: "unknown"` (`verify-20260914T230102Z.txt`) — not a monitoring failure.
+`verify.sh` waited for container health but not the first scrape, so it queried
+during cold start; earlier runs passed only because the stack was warm. Fixed
+by polling the targets API. Container readiness and scrape readiness are
+distinct conditions.
 
-Service behaviour — the API really is that fast. Check with curl -w '%{time_total}' against the same endpoint.
-Observability implementation — bucket boundaries too coarse at the low end. Check http_request_duration_seconds_bucket raw: if the le="0.0001" bucket already holds nearly every observation, the buckets are wrong.
-The experiment — loadgen.sh uses curl, so each request pays process startup; that is client-side and would inflate, not deflate, the number. Rules itself out if server-side latency reads lower than client-side.
+**Left unfixed deliberately:** `PUT /tasks/{id}` returns `NaN` for the
+per-route mean when no PUT falls in the rate window. `or vector(0)` would claim
+a measurement never taken; `NaN` honestly means "no traffic".
 
-Raw queries to run alongside the dashboard:
+## 4. Two deliberate trade-offs
 
-promql
-http_request_duration_seconds_bucket
-sum by (le) (rate(http_request_duration_seconds_bucket[1m]))
-histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket[1m])))
-rate(http_request_duration_seconds_sum[1m]) / rate(http_request_duration_seconds_count[1m])
+**(a) `scratch` instead of `gcr.io/distroless/static`.** Saves ~2 MiB of base
+layer for things unused here: CA bundle (no outbound TLS), tzdata (UTC only),
+nsswitch.conf (the healthcheck dials `127.0.0.1` literally). Cost: the first
+outbound HTTPS call fails with an x509 error that looks nothing like a
+missing-certs problem, and there is no shell for post-mortem. *Reversal:* first
+outbound HTTPS dependency, or the first incident where lack of `docker exec`
+slows diagnosis. Fix is one `COPY` of `ca-certificates.crt`, ~200 KB.
 
-That last one is the control: the true mean is computed without bucket interpolation. If the mean sits well below the reported p50, the buckets are the problem, not the service.
+**(b) Kept `prometheus/client_golang` despite it being most of the binary.**
+Hand-writing exposition format would reach ~3 MB but means maintaining bucket
+accumulation, label escaping and concurrency-safe counters by hand — and §3
+shows bucket boundaries are already the subtle part. *Reversal:* budget below
+~8 MiB, or a pull-time requirement making image size latency-critical. UPX was
+declined for the same reason: it halves the image but adds decompression to
+every healthcheck exec and trips scanners that flag packed binaries.
 
-Observed (fill in after the run)
-#	Panel	Matched?	Actual
-1	Scrape target	«FILL»	
-2	Requests/sec	«FILL»	
-3	5xx ratio	«FILL»	
-4	In flight	«FILL»	
-5	Build	«FILL»	
-6	Rate by route/code	«FILL»	
-7	Latency percentiles	«FILL»	
-8	Task state	«FILL»	
-9	p95 by route	«FILL»	
-Conclusion and action
+## 5. Validation boundary
 
-## 4. Two Engineering Trade-offs
+`publish` and `deploy` are gated on
+`github.event_name == 'push' && github.ref == 'refs/heads/main'`. Fork PRs never
+receive `packages: write`; the `image` job builds with `load: true, push: false`
+so a fork still exercises the full build with no credentials. Credentials are
+the run-scoped `GITHUB_TOKEN` — no PAT stored in the repository, nothing echoed
+to logs.
 
-Describe two trade-offs that you actually made. For each one, explain the constraint, the options you considered, your final choice, how you validated it, the remaining risk, and the new condition that would make you change the decision.
+(a) Both jobs ran online: link the run and the digest.
+(b) They could not: state why (e.g. GHCR package permissions), and reference
+the local equivalent — `make image size scan` plus
+`deploy/evidence/verify-*.txt`, which performs the same smoke test and target
+assertion the deploy job does.»
 
-(a) scratch base instead of gcr.io/distroless/static. Saves ~2 MiB of base layer for things this binary does not use: CA bundle (no outbound TLS), tzdata (UTC only), nsswitch.conf (the healthcheck dials 127.0.0.1 by literal address, so no DNS). Cost: the day someone adds an outbound HTTPS call it fails with an x509 error that looks nothing like a missing-certs problem, and there is no shell for post-mortem debugging. Reversal condition: the first outbound HTTPS dependency, or the first incident where lack of docker exec materially slows diagnosis. The fix is one COPY --from=build /etc/ssl/certs/ca-certificates.crt, ~200 KB.
+## 6. Time, unfinished work, next steps
 
-(b) Kept prometheus/client_golang despite it being most of the 10.9 MB. Hand-writing the exposition format would land near 3 MB. I declined: it means maintaining bucket accumulation, label escaping and concurrency-safe counters by hand, and the only benefit is bytes I do not need under a 15 MiB budget with 31% headroom. Reversal condition: the budget dropping below ~8 MiB, or a cold-start/pull-time requirement that makes image size latency-critical.
+- **Actual time spent:** «3 hours including the debugging in §3»
+- **Unfinished:** readiness endpoint distinct from liveness; no persistence, so
+  task state is lost on restart; dashboard panels not screenshotted into the
+  repository; «FILL — anything else»
+- **Next steps, in priority order:**
+  1. Split readiness from liveness so a dependency check can gate traffic
+     without triggering restarts.
+  2. Alert rule on 5xx ratio, demonstrated firing and recovering.
+  3. Persistence, at which point `taskStateCollector` assumption 1 stops
+     holding and task state must be aggregated across replicas.
 
-I also declined UPX for the same reason — it would have halved the image, but it adds decompression cost to every healthcheck exec, raises RSS, and trips scanners that flag packed binaries.
+## 7. AI usage
 
-## 5. Actual Time Spent
+Tool: **Claude (Anthropic)**, web interface. Transcripts and index:
+`deploy/ai-transcripts/`.
 
-The suggested effort is 2–3 hours, not a hard limit.
-
-- Actual time spent:
-- Work deliberately left out, and why:
-- What you would do next with another 60 minutes:
-
-## 6. Use of AI
-
-If you used AI:
-
-- list every transcript file committed under `deploy/ai-transcripts/`;
-- identify the tool and model for each session when known;
-- describe one specific output that you changed or rejected and the evidence that helped you find the problem.
-
-The transcript files must contain every prompt and visible response, as required by the repository README. If you did not use AI, write “Not used.”
-
-
-AI was used. Tool and model: Claude Code (CLI), model `claude-opus5`. 
-
-The model initially proposed a RegisterStoreMetrics helper that registered into the global default registry. I rejected it: the default registerer is process-global, so constructing metrics twice in tests panics on duplicate registration. Replaced with a private prometheus.NewRegistry() per Metrics instance.
-
-The model added UPX compression when asked to shrink the image, then I had it removed — the binary was already 10.9 MB against a 15 MiB budget, and packing costs decompression on every healthcheck exec for bytes I did not need.
-
-
-The unknown result is a second, smaller investigation and it costs you two sentences:
-
-The first clean-environment run reported both Prometheus targets as health: "unknown" (verify-20260914T230102Z.txt). This was not a monitoring failure: verify.sh waited for container health but not for the first scrape to complete, so it queried the target list during cold start. Fixed by polling the targets API until a sample lands. Container readiness and scrape readiness are distinct conditions, and the earlier runs had only passed because the stack was already warm.
+**Output I reviewed and changed:**
+- *Rejected:* an initial `RegisterStoreMetrics` helper that registered into
+  `prometheus.DefaultRegisterer`. The default registry is process-global, so
+  constructing metrics twice in tests panics on duplicate registration.
+  Replaced with a private `prometheus.NewRegistry()` per `Metrics`.
+- *Rejected after trying it:* UPX compression, added when I asked to shrink the
+  image, then removed — the binary was already 10.9 MB under a 15 MiB budget
+  and packing costs decompression on every healthcheck exec.
+- *Changed:* the suggested `store.Count()` / `store.CountDone()` do not exist;
+  the `Store` interface exposes `Stats() (total, done int)`, which is what
+  `NewMetrics` takes.
+- *Corrected:* the model twice misdiagnosed an empty-looking scrape (it was
+  `head -30` truncating before `task_api_*`, which sorts after `go_*`), and
+  once claimed my `metrics.go` was stale based on a `grep -c` that was counting
+  lines rather than occurrences.
